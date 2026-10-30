@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Rivals</title>
+    <style>
+        /* --- GLOBAL APPLICATION OVERLAYS --- */
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0b0b10;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            font-family: monospace;
+            user-select: none;
+            /* Prevents text selection highlight artifacts when click-spamming the blaster */
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            image-rendering: pixelated;
+            /* Forces a crisp, clean, retro low-res look without bilinear filtering blur */
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #00ff66;
+            font-size: 22px;
+            text-shadow: 2px 2px #000;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            border: 2px solid #00ff66;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #state-display {
+            position: absolute;
+            top: 55px;
+            left: 20px;
+            color: #00ffff;
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 1px 1px #000;
+            pointer-events: none;
+        }
+
+        #menu-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 15, 0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            text-align: center;
+            color: #fff;
+        }
+
+        .btn {
+            padding: 15px 35px;
+            background: #e94560;
+            border: none;
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 25px;
+            letter-spacing: 2px;
+            box-shadow: 0 0 15px rgba(233, 69, 96, 0.4);
+            transition: transform 0.1s ease;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+            background: #ff5270;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="ui">KILLS: <span id="score">0</span> | HP: <span id="hp">100</span></div>
+    <div id="state-display">STANCE: PAUSED</div>
+    <div id="crosshair"></div>
+
+    <div id="menu-overlay">
+        <h1 style="color: #e94560; font-size: 45px; margin-bottom: 5px; text-shadow: 3px 3px #000;">3D RIVALS ARENA</h1>
+        <p style="color: #00ffff; font-size: 14px; margin-top: 0;">Kinetic Engine v2.2 Production Master - Final Version
+        </p>
+
+        <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; border: 1px solid #333; text-align: left; max-width: 450px; line-height: 1.6;">
+            <b style="color: #00ff66;">CONTROLS SCHEMATIC:</b><br>
+            • <b style="color: #fff;">W, A, S, D</b> — Translate Position<br>
+            • <b style="color: #fff;">Trackpad / Mouse</b> — Panoramic Look Control<br>
+            • <b style="color: #fff;">Left Click</b> — Fire Plasma Blaster<br>
+            • <b style="color: #00ffff;">Hold Shift</b> — Hold-to-Crouch (Minecraft style)<br>
+            • <b style="color: #00ffff;">Tap Caps Lock</b> — Toggle Crouch On/Off<br>
+            • <b style="color: #fff;">W + (Shift or Caps Lock)</b> — Tactical Slide Routine<br>
+            • <b style="color: #e94560;">Press ESC Key</b> — View Pause Menu Layer<br>
+            <a href="index.html"><b style="color: #00ff66;">Home</b></a> - Go to Homepage
+        </div>
+
+        <button class="btn" id="resumeBtn">CLICK TO PLAY</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const menuOverlay = document.getElementById("menu-overlay");
+        const resumeBtn = document.getElementById("resumeBtn");
+
+        // Dynamic viewport scale down-sizing for genuine low-res raycaster throughput load
+        function resizeCanvas() {
+            canvas.width = window.innerWidth / 2;
+            canvas.height = window.innerHeight / 2;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- MAP ENVIRONMENT GRID (Perfect 16x16 Structure Array Matrix) ---
+        // Numbers > 0 register as a solid block wall texture collision instance
+        const mapSize = 16;
+        const map = [
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1,
+            1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+        ];
+
+        // --- PLAYER VECTOR DATA STRUCTURE ---
+        let player = {
+            x: 3.5, y: 3.5,            // Floating grid decimal points position vectors
+            angle: 0, hp: 100, score: 0,
+            baseSpeed: 0.07, currentSpeed: 0.07,
+            toggleCrouchActive: false, // Tracks toggle statuses natively using e.getModifierState API
+            holdCrouchActive: false,   // Tracks hold stances mapped to Shift
+            isSliding: false,          // Active flag for rapid velocity slides
+            slideTimer: 0, slideDirX: 0, slideDirY: 0,
+            eyeHeightOffset: 0         // Tracks canvas height offset context to shift horizon line up or down
+        };
+
+        let isPaused = true;
+        let weapon = { recoilY: 0, muzzleFlashFrame: 0 };
+        let npcs = [];
+        let bullets = [];
+
+        // --- POINTER LOCK INTERFACES ---
+        resumeBtn.addEventListener('click', () => { canvas.requestPointerLock(); });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === canvas) {
+                isPaused = false;
+                menuOverlay.style.display = "none";
+            } else {
+                isPaused = true;
+                menuOverlay.style.display = "flex";
+                keys = {}; // Sanitizes input flags to zero out frozen motion when dropping app focus
+                player.holdCrouchActive = false;
+            }
+        });
+
+        // Window blur safety check catches background tabs switching and stops endless key running states
+        window.addEventListener('blur', () => {
+            keys = {};
+            player.holdCrouchActive = false;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isPaused) return;
+            // Increments camera horizontal tracking yaw angle via raw mouse input velocity scaling
+            player.angle += e.movementX * 0.0035;
+            // Full circular angle clamping constraints keeps values neatly wrapped inside 0 to 2*PI radians
+            while (player.angle < 0) player.angle += Math.PI * 2;
+            while (player.angle > Math.PI * 2) player.angle -= Math.PI * 2;
+        });
+
+        // --- KEYBOARD HARDWARE INTERACTION ENGINE ---
+        let keys = {};
+        window.addEventListener('keydown', (e) => {
+            if (isPaused) return;
+
+            let key = e.key.toLowerCase();
+
+            // FIX: Pull directly from the OS modifier state layer to keep Caps Lock perfectly synced
+            player.toggleCrouchActive = e.getModifierState("CapsLock");
+
+            let isCrouchKeyPress = (e.key === "CapsLock" || e.key === "Shift");
+
+            // EVALUATE COMBAT SLIDE ROUTINE MODES: Requires forward momentum ('w') + a crouch input
+            if (isCrouchKeyPress && keys['w'] && !player.isSliding) {
+                player.isSliding = true;
+                player.slideTimer = 25; // Continuous lifetime execution loop ticks
+                player.slideDirX = Math.cos(player.angle);
+                player.slideDirY = Math.sin(player.angle);
+            } else {
+                if (e.key === "Shift") {
+                    player.holdCrouchActive = true;
+                }
+            }
+
+            keys[key] = true;
+            if (e.key === "Shift") keys['shift'] = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            let key = e.key.toLowerCase();
+            keys[key] = false;
+
+            // FIX: Update the modifier state register on release to track when Caps Lock turns off
+            player.toggleCrouchActive = e.getModifierState("CapsLock");
+
+            if (e.key === "Shift") {
+                keys['shift'] = false;
+                player.holdCrouchActive = false;
+            }
+        });
+
+        window.addEventListener('mousedown', (e) => {
+            if (!isPaused && player.hp > 0 && e.button === 0) {
+                spawnBullet(player.x, player.y, player.angle, true);
+                weapon.recoilY = 15; // Set pixel layout offset values for view weapon shift animations
+                weapon.muzzleFlashFrame = 4; // Lifetime draw tracking frames for drawing muzzle flares
+            }
+        });
+
+        // Scans map geometry positions until an empty, open coordinate is generated away from the player's vector area
+        function generateSafeNPCCoords() {
+            let safe = false; let rx, ry;
+            while (!safe) {
+                rx = Math.floor(Math.random() * (mapSize - 2)) + 1;
+                ry = Math.floor(Math.random() * (mapSize - 2)) + 1;
+                if (map[ry * mapSize + rx] === 0) {
+                    let distToPlayer = Math.sqrt(Math.pow((rx + 0.5) - player.x, 2) + Math.pow((ry + 0.5) - player.y, 2));
+                    if (distToPlayer > 4.0) safe = true; // Prevents enemies spawning on top of user
+                }
+            }
+            return { x: rx + 0.5, y: ry + 0.5 };
+        }
+
+        function initEnemies() {
+            npcs = [];
+            for (let i = 0; i < 4; i++) {
+                let coords = generateSafeNPCCoords();
+                npcs.push({ x: coords.x, y: coords.y, hp: 20, shootCooldown: Math.random() * 60 });
+            }
+        }
+
+        function spawnBullet(startX, startY, angle, isPlayerOwned) {
+            bullets.push({ x: startX, y: startY, dirX: Math.cos(angle), dirY: Math.sin(angle), isPlayer: isPlayerOwned, life: 120 });
+        }
+
+        // --- MAIN SIMULATION LOOP (Runs every animation frame tick) ---
+        function updateAndRender() {
+            if (isPaused) {
+                document.getElementById("state-display").innerText = "STANCE: PAUSED";
+                requestAnimationFrame(updateAndRender);
+                return;
+            }
+
+            // Smooth weapon frame asset transformations decay
+            if (weapon.recoilY > 0) weapon.recoilY -= 1.5;
+            if (weapon.muzzleFlashFrame > 0) weapon.muzzleFlashFrame--;
+
+            // --- STANCE & VELOCITY STATE CONTROLLER ---
+            let stateText = "STANCE: STANDING";
+
+            // FIX: Explicitly poll hardware array registers to keep the engine from dropping the shift state when a slide finishes
+            if (keys['shift']) {
+                player.holdCrouchActive = true;
+            }
+
+            let crouchConditionActive = (player.toggleCrouchActive || player.holdCrouchActive);
+
+            if (player.isSliding) {
+                stateText = "STANCE: ⚡ SLIDING (IMMUNE)";
+                player.eyeHeightOffset = -40; // Heavy screen height offset drop
+                player.currentSpeed = player.baseSpeed * 1.8; // 180% velocity surge
+                player.slideTimer--;
+                if (player.slideTimer <= 0) {
+                    player.isSliding = false;
+                    // FIX: Re-verify if the user is still actively pressing down Shift to remain crouching seamlessly
+                    if (keys['shift']) {
+                        player.holdCrouchActive = true;
+                    } else {
+                        player.holdCrouchActive = false;
+                    }
+                }
+            } else if (crouchConditionActive) {
+                stateText = "STANCE: 🛑 CROUCHED (DEFENSE+)";
+                player.eyeHeightOffset = -22; // Mid level elevation camera drop
+                player.currentSpeed = player.baseSpeed * 0.45; // Speed penalized movement speed
+            } else {
+                player.eyeHeightOffset = 0;
+                player.currentSpeed = player.baseSpeed;
+            }
+            document.getElementById("state-display").innerText = stateText;
+
+            // --- STRIDING INDEPENDENT MOTION TRANSLATION VECTOR ---
+            let moveX = 0; let moveY = 0;
+            if (player.isSliding) {
+                moveX = player.slideDirX * player.currentSpeed;
+                moveY = player.slideDirY * player.currentSpeed;
+            } else {
+                let rawX = 0; let rawY = 0;
+                // Accumulate composite values based on multi-key configurations
+                if (keys['w']) { rawX += Math.cos(player.angle); rawY += Math.sin(player.angle); }
+                if (keys['s']) { rawX -= Math.cos(player.angle); rawY -= Math.sin(player.angle); }
+                if (keys['a']) { rawX += Math.sin(player.angle); rawY -= Math.cos(player.angle); }
+                if (keys['d']) { rawX -= Math.sin(player.angle); rawY += Math.cos(player.angle); }
+
+                // Vector normalization algorithm stops diagonal strafe running exploit speeds
+                let mag = Math.sqrt(rawX * rawX + rawY * rawY);
+                if (mag > 0) {
+                    moveX = (rawX / mag) * player.currentSpeed;
+                    moveY = (rawY / mag) * player.currentSpeed;
+                }
+            }
+
+            // --- INDEPENDENT COLLISION PHYSICS MATRIX ---
+            // Decoupled sliding axis logic evaluates tracking barriers on X and Y spaces individually.
+            // This insulates vectors from freezing to 0 when sliding against flat solid block faces.
+            let playerRadius = 0.35;
+            let signX = moveX > 0 ? playerRadius : -playerRadius;
+            let signY = moveY > 0 ? playerRadius : -playerRadius;
+
+            if (map[Math.floor(player.y) * mapSize + Math.floor(player.x + moveX + signX)] === 0) {
+                player.x += moveX;
+            }
+            if (map[Math.floor(player.y + moveY + signY) * mapSize + Math.floor(player.x)] === 0) {
+                player.y += moveY;
+            }
+
+            // --- RENDER BACKGROUND ENVIRONMENT PANELS ---
+            let halfHeight = canvas.height / 2;
+            let horizonShift = player.eyeHeightOffset; // Applies sliding camera height changes directly to viewport transformations
+            ctx.fillStyle = "#14141f"; ctx.fillRect(0, 0, canvas.width, halfHeight + horizonShift);
+            ctx.fillStyle = "#0a0a0d"; ctx.fillRect(0, halfHeight + horizonShift, canvas.width, canvas.height);
+
+            // --- PRIMARY 3D RAYCASTING ENGINE CORRIDOR GENERATOR ---
+            const fov = Math.PI / 3; const numRays = canvas.width;
+            let depthBuffer = new Array(numRays).fill(16); // Storage buffer limits used later to check depth sorting occlusion bounds on objects
+
+            for (let i = 0; i < numRays; i++) {
+                // Evaluates the absolute radian trajectory angle for every pixel slice index across the FOV spread
+                let rayAngle = (player.angle - fov / 2) + (i / numRays) * fov;
+                let distanceToWall = 0; let hitWall = false;
+                let eyeX = Math.cos(rayAngle); let eyeY = Math.sin(rayAngle);
+
+                // High precision incremental ray marcher step resolution to seal wall joints from visual tearing gaps
+                while (!hitWall && distanceToWall < 16) {
+                    distanceToWall += 0.015;
+                    let checkX = Math.floor(player.x + eyeX * distanceToWall);
+                    let checkY = Math.floor(player.y + eyeY * distanceToWall);
+
+                    // Out of bounds boundary safe catches
+                    if (checkX < 0 || checkX >= mapSize || checkY < 0 || checkY >= mapSize) {
+                        hitWall = true; distanceToWall = 16;
+                    } else if (map[checkY * mapSize + checkX] > 0) {
+                        hitWall = true;
+                    }
+                }
+
+                // Fish-eye calculation projection corrections using cosine variance profiles
+                let correctedDist = distanceToWall * Math.cos(rayAngle - player.angle);
+                depthBuffer[i] = correctedDist; // Store results into 1D buffer sequence maps
+
+                // Scaling ratios calculate screen coordinates relative to distance metrics
+                let wallProjectedSize = canvas.height / correctedDist;
+                let ceiling = (halfHeight + horizonShift) - wallProjectedSize;
+                let floor = (halfHeight + horizonShift) + wallProjectedSize;
+
+                // Simulated linear depth atmospheric shading parameters (Further wall slices draw darker colors)
+                let colorValue = Math.max(10, Math.min(130, 150 - (correctedDist * 11)));
+                ctx.fillStyle = `rgb(${colorValue}, ${colorValue + 8}, ${colorValue + 20})`;
+                ctx.fillRect(i, ceiling, 1, floor - ceiling);
+            }
+
+            // --- PROJECTILES FLUSH MATRIX & PROCESSOR ---
+            let npcsToRespawn = []; // Defer array tracking isolates deletions from mutating structural indices mid-execution loop
+
+            for (let b = bullets.length - 1; b >= 0; b--) {
+                let bullet = bullets[b];
+                bullet.x += bullet.dirX * 0.22; bullet.y += bullet.dirY * 0.22; bullet.life--;
+
+                // Trash collection criteria evaluations
+                if (map[Math.floor(bullet.y) * mapSize + Math.floor(bullet.x)] > 0 || bullet.life <= 0) {
+                    bullets.splice(b, 1);
+                    continue;
+                }
+
+                let bulletRemoved = false;
+                if (bullet.isPlayer) {
+                    // Check intersections against NPC entities
+                    for (let n = npcs.length - 1; n >= 0; n--) {
+                        let npc = npcs[n];
+                        let hDist = Math.sqrt(Math.pow(bullet.x - npc.x, 2) + Math.pow(bullet.y - npc.y, 2));
+                        if (hDist < 0.4) {
+                            npc.hp -= 10;
+                            bullets.splice(b, 1);
+                            bulletRemoved = true;
+                            if (npc.hp <= 0) {
+                                player.score++;
+                                document.getElementById("score").innerText = player.score;
+                                if (!npcsToRespawn.includes(n)) npcsToRespawn.push(n);
+                            }
+                            break;
+                        }
+                    }
+                } else {
+                    // Check intersection vectors against player entity bounds
+                    let pDist = Math.sqrt(Math.pow(bullet.x - player.x, 2) + Math.pow(bullet.y - player.y, 2));
+                    if (pDist < 0.35) {
+                        bullets.splice(b, 1);
+                        bulletRemoved = true;
+                        if (!player.isSliding) { // Player is immune to damage frames during high velocity slides
+                            if (crouchConditionActive) player.hp -= 2; // Damage reduction stance modifier
+                            else player.hp -= 6;
+                            document.getElementById("hp").innerText = Math.max(0, Math.floor(player.hp));
+
+                            if (player.hp <= 0) {
+                                document.exitPointerLock();
+                                alert("ELIMINATED! Final Score: " + player.score);
+                                player.hp = 100; player.score = 0; player.x = 3.5; player.y = 3.5;
+                                player.toggleCrouchActive = false; player.holdCrouchActive = false;
+                                document.getElementById("score").innerText = "0";
+                                document.getElementById("hp").innerText = "100";
+                                initEnemies(); bullets = [];
+                                npcsToRespawn = [];
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (bulletRemoved) continue;
+            }
+
+            // Execution phase completes dead object deletion cleanly outside loop runs
+            npcsToRespawn.forEach(index => {
+                let newCoords = generateSafeNPCCoords();
+                npcs[index] = { x: newCoords.x, y: newCoords.y, hp: 20, shootCooldown: 40 };
+            });
+
+            // --- ACTORS/ENEMIES GRAPHICS BILLBOARDS LAYER ---
+            npcs.forEach((npc) => {
+                let dx = npc.x - player.x; let dy = npc.y - player.y; let dist = Math.sqrt(dx * dx + dy * dy);
+                let enemyAngle = Math.atan2(dy, dx);
+
+                // --- ABSOLUTE ENEMY-WALL PHYSICS BUFFER MATRIX ---
+                // Enforces a strict 0.35 padding tracking constraint layout preventing AI objects from pushing themselves inside block borders
+                let enemyRadius = 0.35;
+                if (dist > 4.5) {
+                    let ndx = Math.cos(enemyAngle) * 0.025; let ndy = Math.sin(enemyAngle) * 0.025;
+                    let signEX = ndx > 0 ? enemyRadius : -enemyRadius;
+                    let signEY = ndy > 0 ? enemyRadius : -enemyRadius;
+                    if (map[Math.floor(npc.y) * mapSize + Math.floor(npc.x + ndx + signEX)] === 0) npc.x += ndx;
+                    if (map[Math.floor(npc.y + ndy + signEY) * mapSize + Math.floor(npc.x)] === 0) npc.y += ndy;
+                } else if (dist < 3.0) {
+                    let ndx = Math.cos(enemyAngle) * 0.02; let ndy = Math.sin(enemyAngle) * 0.02;
+                    let signEX = -ndx > 0 ? enemyRadius : -enemyRadius;
+                    let signEY = -ndy > 0 ? enemyRadius : -enemyRadius;
+                    if (map[Math.floor(npc.y) * mapSize + Math.floor(npc.x - ndx + signEX)] === 0) npc.x -= ndx;
+                    if (map[Math.floor(npc.y - ndy + signEY) * mapSize + Math.floor(npc.x)] === 0) npc.y -= ndy;
+                }
+
+                npc.shootCooldown--;
+                if (npc.shootCooldown <= 0 && dist < 10) {
+                    let targetAngle = Math.atan2(player.y - npc.y, player.x - npc.x);
+                    spawnBullet(npc.x, npc.y, targetAngle, false);
+                    npc.shootCooldown = 50 + Math.random() * 40;
+                }
+
+                // Compute exact angular location deviations relative to player camera directional orientations
+                let npcRelAngle = enemyAngle - player.angle;
+                while (npcRelAngle < -Math.PI) npcRelAngle += Math.PI * 2;
+                while (npcRelAngle > Math.PI) npcRelAngle -= Math.PI * 2;
+
+                if (Math.abs(npcRelAngle) < fov * 1.5 && dist > 0.3) {
+                    let spaceProjX = Math.tan(npcRelAngle) / Math.tan(fov / 2);
+                    let spriteScreenX = (0.5 + spaceProjX * 0.5) * canvas.width;
+
+                    let correctedDist = dist * Math.cos(npcRelAngle);
+                    let spriteHeight = canvas.height / correctedDist;
+                    let spriteWidth = spriteHeight / 1.4;
+                    let spriteScreenY = halfHeight + horizonShift;
+
+                    let startX = Math.floor(spriteScreenX - spriteWidth / 2);
+                    let endX = Math.floor(spriteScreenX + spriteWidth / 2);
+
+                    // Bound checks avoid tracking index processing across massive hidden out-of-bounds scan areas
+                    if (startX < 0) startX = 0;
+                    if (endX > canvas.width) endX = canvas.width;
+
+                    // --- ADVANCED 1D Z-BUFFER CLIPPING BUFFER FIX ---
+                    // By shifting the sprite's virtual sorting distance slightly forward (-0.25), we stop the single-point tracking from slicing flat cards into overlapping solid walls.
+                    let visualClippedDepth = correctedDist - 0.25;
+
+                    for (let x = startX; x < endX; x++) {
+                        if (depthBuffer[x] > visualClippedDepth) {
+                            ctx.fillStyle = "#e94560";
+                            ctx.fillRect(x, spriteScreenY - spriteHeight / 2, 1, spriteHeight);
+
+                            // Draws dark silhouette outline framing borders matching retro graphics edge aesthetics
+                            if (x === Math.floor(spriteScreenX - spriteWidth / 2) || x === Math.floor(spriteScreenX + spriteWidth / 2) - 1) {
+                                ctx.fillStyle = "#8a1c30"; ctx.fillRect(x, spriteScreenY - spriteHeight / 2, 1, spriteHeight);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // --- AMMUNITION SPHERE DRAW OVERLAYS ---
+            bullets.forEach((bullet) => {
+                let bDx = bullet.x - player.x; let bDy = bullet.y - player.y; let bDist = Math.sqrt(bDx * bDx + bDy * bDy);
+                let bAngle = Math.atan2(bDy, bDx) - player.angle;
+                while (bAngle < -Math.PI) bAngle += Math.PI * 2;
+                while (bAngle > Math.PI) bAngle -= Math.PI * 2;
+
+                if (Math.abs(bAngle) < fov * 1.5 && bDist > 0.2) {
+                    let spaceProjX = Math.tan(bAngle) / Math.tan(fov / 2);
+                    let screenX = Math.floor((0.5 + spaceProjX * 0.5) * canvas.width);
+                    let correctedBDist = bDist * Math.cos(bAngle);
+
+                    if (screenX >= 0 && screenX < canvas.width && depthBuffer[screenX] > (correctedBDist - 0.1)) {
+                        let bSize = canvas.height / correctedBDist / 6;
+                        ctx.fillStyle = bullet.isPlayer ? "#00ffcc" : "#ffaa00";
+                        ctx.beginPath();
+                        ctx.arc(screenX, halfHeight + horizonShift, Math.max(2, bSize), 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            });
+
+            // --- STATIC 2D BLASTER HUD DRAW CALL TRANSFORMS ---
+            let gunBaseX = canvas.width * 0.68;
+            let gunBaseY = canvas.height * 0.60 + weapon.recoilY + (horizonShift * 0.4);
+            ctx.fillStyle = "#1e1e24"; ctx.fillRect(gunBaseX, gunBaseY, 30, 80);
+            ctx.fillStyle = "#2d3238"; ctx.fillRect(gunBaseX - 5, gunBaseY + 15, 36, 65);
+            ctx.fillStyle = "#4f5d65"; ctx.fillRect(gunBaseX + 8, gunBaseY - 20, 14, 40);
+            ctx.fillStyle = "#00ffcc"; ctx.fillRect(gunBaseX + 13, gunBaseY - 15, 4, 35);
+
+            // Muzzle flash processing sequence overlays
+            if (weapon.muzzleFlashFrame > 0) {
+                ctx.fillStyle = "rgba(0, 255, 210, 0.9)";
+                ctx.beginPath(); ctx.arc(gunBaseX + 15, gunBaseY - 22, 18, 0, Math.PI * 2); ctx.fill();
+                // Applies an alpha screen tint overlay calculation on matching shot frames
+                ctx.fillStyle = "rgba(0, 255, 210, 0.08)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            requestAnimationFrame(updateAndRender);
+        }
+
+        // Initialize entities and execute system loop sequence processes
+        initEnemies();
+        updateAndRender();
+    </script>
+</body>
+
+</html>
